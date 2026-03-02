@@ -2,65 +2,132 @@ import http from 'http';
 import express from 'express';
 import cors from 'cors';
 import { config } from './config/index.js';
-import { initFirebase } from './services/firebase.js';
-import { ChainStore } from './store/chainStore.js';
-import { IngestionService } from './services/ingestionService.js';
 import { WsHub } from './services/wsHub.js';
+import { RpcManager } from './managers/rpcManager.js';
+import { FirebaseManager } from './managers/firebaseManager.js';
+import { ReorgManager } from './managers/reorgManager.js';
+import { IngestionManager } from './managers/ingestionManager.js';
 
-initFirebase();
-const store = new ChainStore();
+const metrics = {
+  startedAt: Date.now(),
+  blocksProcessed: 0,
+  rpcErrors: 0,
+  firebaseErrors: 0,
+  rateLimitEvents: 0,
+  reorgCount: 0,
+  backpressurePauses: 0
+};
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+function log(event, payload = {}) {
+  console.log(JSON.stringify({ level: 'info', event, ts: new Date().toISOString(), ...payload }));
+}
 
-app.get('/health', (_, res) => res.json({ ok: true }));
+async function bootstrap() {
+  const firebaseManager = new FirebaseManager();
+  firebaseManager.initFirebase();
+  await firebaseManager.verifyDatabaseConnection();
+  log('firebase.ready');
 
-app.get('/api/blocks', (req, res) => {
-  const blocks = store.getWindowBlocks();
-  const { nodeId, fromHeight, toHeight } = req.query;
-  const filtered = blocks.filter((b) => {
-    if (nodeId && b.nodeId !== nodeId) return false;
-    if (fromHeight && b.blockHeight < Number(fromHeight)) return false;
-    if (toHeight && b.blockHeight > Number(toHeight)) return false;
-    return true;
+  const rpcManager = new RpcManager(config.nodes, metrics);
+  const reorgManager = new ReorgManager({
+    windowSize: config.ingestion.lastBlocksWindow,
+    metrics,
+    onRollback: async (_nodeId, fromHeight, toHeight) => {
+      try {
+        await firebaseManager.rollbackBlocks(fromHeight, toHeight);
+      } catch (error) {
+        metrics.firebaseErrors += 1;
+        log('firebase.rollback.error', { message: error.message, fromHeight, toHeight });
+      }
+    }
   });
-  res.json(filtered);
-});
 
-app.get('/api/blocks/:hash', (req, res) => {
-  const block = store.getBlockByHash(req.params.hash);
-  if (!block) return res.status(404).json({ error: 'Block not found' });
-  res.json(block);
-});
+  const app = express();
+  app.use(cors());
+  app.use(express.json());
 
-app.get('/api/transactions/:txHash', (req, res) => {
-  const tx = store.getTransaction(req.params.txHash);
-  if (!tx) return res.status(404).json({ error: 'Transaction not found' });
-  res.json(tx);
-});
+  const server = http.createServer(app);
+  const wsHub = new WsHub(server, config.broadcastWindowMs);
 
-app.get('/api/holders/:address', (req, res) => {
-  const addr = req.params.address.toLowerCase();
-  const txs = store
-    .getWindowBlocks()
-    .flatMap((b) => b.transactions.map((tx) => ({ ...tx, blockHeight: b.blockHeight, nodeId: b.nodeId })))
-    .filter((tx) => tx.from?.toLowerCase() === addr || tx.to?.toLowerCase() === addr);
-  res.json({ address: req.params.address, transactions: txs });
-});
+  const ingestionManager = new IngestionManager({
+    rpcManager,
+    firebaseManager,
+    reorgManager,
+    metrics,
+    onCanonicalBlock: (block) => wsHub.enqueue(block)
+  });
 
-const server = http.createServer(app);
-const wsHub = new WsHub(server, config.broadcastWindowMs);
-const ingestion = new IngestionService(config.nodes, store, (block) => wsHub.enqueue(block));
+  await ingestionManager.startIngestion();
+  log('ingestion.started', { nodes: config.nodes.map((n) => n.nodeId) });
 
-ingestion.start();
+  app.get('/health', (_req, res) => {
+    res.json({ ok: true, uptimeSec: Math.round((Date.now() - metrics.startedAt) / 1000) });
+  });
 
-server.listen(config.port, () => {
-  console.log(`Backend listening on http://localhost:${config.port}`);
-});
+  app.get('/metrics', (_req, res) => {
+    res.json({
+      ...metrics,
+      queueDepths: Object.fromEntries(
+        [...ingestionManager.blockQueues.entries()].map(([nodeId, q]) => [nodeId, { depth: q.depth, paused: q.paused }])
+      ),
+      traceQueueDepth: ingestionManager.traceQueue.depth
+    });
+  });
 
-process.on('SIGINT', () => {
-  ingestion.stop();
-  wsHub.close();
-  server.close(() => process.exit(0));
+  app.get('/api/blocks', (req, res) => {
+    const { nodeId, fromHeight, toHeight } = req.query;
+    const blocks = ingestionManager.getWindowBlocks().filter((b) => {
+      if (nodeId && b.nodeId !== nodeId) return false;
+      if (fromHeight && b.blockHeight < Number(fromHeight)) return false;
+      if (toHeight && b.blockHeight > Number(toHeight)) return false;
+      return true;
+    });
+    res.json(blocks);
+  });
+
+  app.get('/api/blocks/:hash', (req, res) => {
+    const block = ingestionManager.getBlockByHash(req.params.hash);
+    if (!block) return res.status(404).json({ error: 'Block not found' });
+    return res.json(block);
+  });
+
+  app.get('/api/transactions/:txHash', (req, res) => {
+    const tx = ingestionManager.getTransaction(req.params.txHash);
+    if (!tx) return res.status(404).json({ error: 'Transaction not found' });
+    return res.json(tx);
+  });
+
+  server.listen(config.port, () => {
+    log('server.ready', { url: `http://localhost:${config.port}` });
+  });
+
+  const metricTimer = setInterval(() => {
+    log('metrics.minute', {
+      blocksProcessedPerMinute: metrics.blocksProcessed,
+      rpcErrors: metrics.rpcErrors,
+      queueDepth: Object.fromEntries(
+        [...ingestionManager.blockQueues.entries()].map(([nodeId, q]) => [nodeId, q.depth])
+      ),
+      traceQueueDepth: ingestionManager.traceQueue.depth,
+      rateLimitEvents: metrics.rateLimitEvents,
+      reorgCount: metrics.reorgCount
+    });
+    metrics.blocksProcessed = 0;
+  }, config.metricsLogIntervalMs);
+
+  const shutdown = () => {
+    clearInterval(metricTimer);
+    ingestionManager.stop();
+    rpcManager.close();
+    wsHub.close();
+    server.close(() => process.exit(0));
+  };
+
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
+}
+
+bootstrap().catch((error) => {
+  console.error(JSON.stringify({ level: 'error', event: 'bootstrap.failed', message: error.message }));
+  process.exit(1);
 });
