@@ -1,0 +1,5 @@
+/backend/.env
+/backend/ServeiceAccuntJson.json
+
+#dependencies
+node_modules
