@@ -3,21 +3,50 @@
 </p>
 
 <h1 align="center">MonadTraceEngine</h1>
+
 <p align="center">
-Production-style Monad indexing project focused on backend reliability, multi-node consistency checks, and real-time trace visualization.
+Production-style multi-node blockchain indexing engine with reorg detection, rate-limit resilience, and real-time execution trace streaming.
 </p>
 
-<href link="https://monadtraceengine.vercel.app">Live Demo</href>
+<p align="center">
+  <a href="https://monadtraceengine.vercel.app" target="_blank"><strong>Live Demo</strong></a>
+</p>
 
-## Why this project
+---
 
-This repo is designed to demonstrate engineering quality for backend-heavy blockchain infrastructure work:
+## Overview
 
-- resilient ingestion from multiple RPC nodes
-- queue-based backpressure and retry handling
-- reorg detection with rollback support
-- trace enrichment (`debug_traceTransaction`) for transaction execution insights
-- real-time UI for chain heads, lag, and block stream state
+MonadTraceEngine is a backend-focused blockchain infrastructure project designed to demonstrate production-grade ingestion, reliability engineering, and real-time observability.
+
+It ingests blocks from multiple RPC nodes, detects consensus divergence, handles reorg rollbacks, extracts execution traces, and streams normalized data to a live frontend dashboard.
+
+This project emphasizes backend system design rather than frontend presentation.
+
+---
+
+## What This Demonstrates
+
+- Distributed systems thinking
+- Multi-node ingestion with consensus comparison
+- Reorg-aware rollback and recovery logic
+- Queue-based backpressure control
+- Per-node rate limiting with retry/backoff
+- Real-time WebSocket streaming architecture
+- Atomic multi-path writes to Firebase RTDB
+- Modular backend system design
+
+---
+
+## Screenshots
+
+<div style="display:flex; overflow-x:auto; gap:12px; padding:10px 0; white-space: nowrap;">
+  <img src="./screenshots/2.jpg" height="260"/>
+  <img src="./screenshots/3.jpg" height="260"/>
+  <img src="./screenshots/4.jpg" height="260"/>
+  <img src="./screenshots/5.jpg" height="260"/>
+</div>
+
+---
 
 ## Architecture
 
@@ -27,7 +56,7 @@ flowchart LR
   N2[Monad Node 2 RPC]
   N3[Monad Node 3 RPC]
 
-  subgraph BE[Backend - Node.js/Express]
+  subgraph BE[Backend - Node.js / Express]
     RM[RpcManager + RateLimiter]
     IM[IngestionManager]
     RGM[ReorgManager]
@@ -65,64 +94,106 @@ flowchart LR
   API --> CG
   WS --> CG
   CG --> MD
-```
+````
 
-## Backend highlights
+---
 
-- `RpcManager`:
-  - per-node token-bucket rate limiting
-  - retry/backoff for rate-limit errors (`-32005`)
-  - temporary node disablement on repeated limit failures
-- `IngestionManager`:
-  - per-node block queues + global trace queue
-  - normalized block/tx storage in memory
-  - indexed tx lookup by hash
-  - node runtime health snapshots and network consensus overview
-- `ReorgManager`:
-  - recent history window per node
-  - rollback callbacks for divergent chain segments
-- `FirebaseManager`:
-  - atomic multi-path writes for blocks/transactions/traces
-  - RTDB-safe sanitization for keys and values
+## Backend Design Highlights
+
+### RpcManager
+
+* Per-node token-bucket rate limiting
+* Exponential backoff for RPC rate-limit errors (`-32005`)
+* Temporary node disablement on repeated failures
+* Multi-node health tracking
+
+### IngestionManager
+
+* Per-node block queues
+* Global trace processing queue
+* Concurrency-limited workers
+* In-memory normalized block + transaction store
+* Indexed transaction lookup by hash
+* Network consensus state snapshotting
+
+### ReorgManager
+
+* Rolling history window per node
+* Parent-hash validation
+* Automatic rollback callbacks on divergence
+* Re-index support for corrected chain segments
+
+### FirebaseManager
+
+* Atomic multi-path updates
+* Sanitized RTDB-safe keys
+* Batched writes for performance
+* Fault-tolerant persistence layer
+
+---
 
 ## API
 
-### Health and metrics
+### Health & Metrics
 
-- `GET /health`
-- `GET /metrics`
+* `GET /health`
+* `GET /metrics`
 
-### Blocks and transactions
+### Blocks
 
-- `GET /api/blocks?nodeId=&status=&fromHeight=&toHeight=&fromTs=&toTs=&limit=`
-- `GET /api/blocks/latest`
-- `GET /api/blocks/:hash`
-- `GET /api/transactions/:txHash`
+* `GET /api/blocks`
+* `GET /api/blocks/latest`
+* `GET /api/blocks/:hash`
 
-### Network and node status
+Query parameters:
 
-- `GET /api/nodes`
-- `GET /api/network/overview`
+* `nodeId`
+* `status`
+* `fromHeight`
+* `toHeight`
+* `fromTs`
+* `toTs`
+* `limit`
+
+### Transactions
+
+* `GET /api/transactions/:txHash`
+
+### Network State
+
+* `GET /api/nodes`
+* `GET /api/network/overview`
 
 ### WebSocket
 
-- endpoint: `ws://localhost:4000/ws` (configurable via `WS_PATH`)
-- events:
-  - `{"type":"ready"}`
-  - `{"type":"blocks","data":[...]}`
+Endpoint:
 
-## Frontend highlights
+```
+ws://localhost:4000/ws
+```
 
-- live timeline grid for per-node block flow
-- pause/resume stream control
-- reconnect with backfill
-- network overview panel for:
-  - chain head agreement/divergence
-  - highest seen/indexed blocks
-  - per-node lag, queue state, and health
-- modal details for transactions and trace summaries
+Events:
 
-## Quick start
+```json
+{ "type": "ready" }
+{ "type": "blocks", "data": [...] }
+```
+
+---
+
+## Frontend Features
+
+* Live multi-node block timeline
+* Chain head agreement/divergence visualization
+* Pause/resume stream control
+* Backfill on reconnect
+* Per-node lag and queue depth display
+* Modal block + transaction details
+* Trace summary inspection
+
+---
+
+## Quick Start
 
 ```bash
 npm install
@@ -131,27 +202,52 @@ npm run dev
 
 Services:
 
-- backend: `http://localhost:4000`
-- frontend: `http://localhost:5173`
+* Backend → [http://localhost:4000](http://localhost:4000)
+* Frontend → [http://localhost:5173](http://localhost:5173)
 
-## Environment variables (backend)
+---
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `4000` | Backend HTTP port |
-| `WS_PATH` | `/ws` | WebSocket endpoint path |
-| `POLL_INTERVAL_MS` | `3000` | Poll cadence for HTTP RPC nodes |
-| `PER_NODE_BLOCK_CONCURRENCY` | `5` | Block-processing workers per node |
-| `TRACE_CONCURRENCY` | `10` | Global trace extraction worker count |
-| `MAX_QUEUE_SIZE` | `1000` | Max queued block or trace tasks |
-| `MAX_IN_MEMORY_BLOCKS` | `5000` | Retained block window in memory |
-| `MAX_REQUESTS_PER_SECOND_PER_NODE` | `40` | Node-level RPC request budget |
-| `SERVICE_ACCOUNT_JSON_PATH` | _none_ | Firebase service account path |
-| `FIREBASE_DATABASE_URL` | _none_ | Firebase RTDB URL override |
+## Environment Variables (Backend)
 
-## Suggested next improvements
+| Variable                           | Default | Description                          |
+| ---------------------------------- | ------- | ------------------------------------ |
+| `PORT`                             | `4000`  | Backend HTTP port                    |
+| `WS_PATH`                          | `/ws`   | WebSocket endpoint path              |
+| `POLL_INTERVAL_MS`                 | `3000`  | Poll cadence for HTTP RPC nodes      |
+| `PER_NODE_BLOCK_CONCURRENCY`       | `5`     | Block-processing workers per node    |
+| `TRACE_CONCURRENCY`                | `10`    | Global trace extraction worker count |
+| `MAX_QUEUE_SIZE`                   | `1000`  | Max queued block or trace tasks      |
+| `MAX_IN_MEMORY_BLOCKS`             | `5000`  | Retained in-memory block window      |
+| `MAX_REQUESTS_PER_SECOND_PER_NODE` | `40`    | Per-node RPC request budget          |
+| `SERVICE_ACCOUNT_JSON_PATH`        | —       | Firebase service account path        |
+| `FIREBASE_DATABASE_URL`            | —       | Firebase RTDB URL                    |
 
-- add integration tests with mocked RPC reorg scenarios
-- persist node health metrics to time-series storage
-- add auth/rate-limits for public API deployment
-- containerize backend/frontend for reproducible environments
+---
+
+## Engineering Focus
+
+This project prioritizes:
+
+* Reliability over raw throughput
+* Observability over abstraction
+* Explicit concurrency control
+* Failure-aware ingestion
+* Clear separation of concerns
+
+It is intentionally structured to reflect backend infrastructure engineering patterns rather than demo-level blockchain tooling.
+
+---
+
+## Potential Future Enhancements
+
+* Integration tests with mocked RPC reorg scenarios
+* Persistent metrics to time-series storage
+* Authentication + API rate limiting
+* Dockerized deployment
+* Horizontal ingestion scaling
+
+---
+
+## License
+
+MIT
