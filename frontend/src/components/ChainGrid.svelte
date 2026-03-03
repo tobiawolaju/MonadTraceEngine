@@ -1,19 +1,22 @@
 <script>
-  import { onDestroy, onMount, tick } from 'svelte';
+  import { onDestroy, onMount, tick } from "svelte";
 
   export let blocks = [];
   export let onSelect = () => {};
 
   const statusColors = {
-    canonical: '#22c55e',
-    pending: '#facc15',
-    'rolled-back': '#f97316'
+    canonical: "#22c55e",
+    pending: "#facc15",
+    "rolled-back": "#f97316",
   };
-  const rowHeight = 72;
-  const blockSize = 30;
+  const rowHeight = 96;
+  const blockWidth = 160;
+  const blockHeight = 56;
   const blockRadius = 9;
   const targetTickCount = 9;
-  const tickStepsMs = [5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000, 900000, 1800000];
+  const tickStepsMs = [
+    5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000, 900000, 1800000,
+  ];
 
   let nowMs = Date.now();
   let scroller;
@@ -29,9 +32,10 @@
     });
 
   const nodeSort = (a, b) => {
-    const aNum = Number(a.replace(/\D+/g, ''));
-    const bNum = Number(b.replace(/\D+/g, ''));
-    if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && aNum !== bNum) return aNum - bNum;
+    const aNum = Number(a.replace(/\D+/g, ""));
+    const bNum = Number(b.replace(/\D+/g, ""));
+    if (!Number.isNaN(aNum) && !Number.isNaN(bNum) && aNum !== bNum)
+      return aNum - bNum;
     return a.localeCompare(b);
   };
 
@@ -50,8 +54,8 @@
     return tickStepsMs[tickStepsMs.length - 1];
   };
 
-  const colorFor = (status) => statusColors[status] || '#94a3b8';
-  const shortHash = (hash) => (hash ? `${hash.slice(0, 8)}...` : 'N/A');
+  const colorFor = (status) => statusColors[status] || "#94a3b8";
+  const shortHash = (hash) => (hash ? `${hash.slice(0, 8)}...` : "N/A");
 
   function jumpToLiveEdge() {
     if (!scroller) return;
@@ -60,12 +64,15 @@
 
   function handleScroll() {
     if (!scroller) return;
-    const remaining = scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
+    const remaining =
+      scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
     if (remaining > 120) followLive = false;
   }
 
   $: nodeIds = [...new Set(blocks.map((b) => b.nodeId))].sort(nodeSort);
-  $: timeValues = blocks.map((b) => Number(b.timestamp)).filter((t) => Number.isFinite(t));
+  $: timeValues = blocks
+    .map((b) => Number(b.timestamp))
+    .filter((t) => Number.isFinite(t));
   $: minTime = timeValues.length ? Math.min(...timeValues) : nowMs - 300000;
   $: maxTime = timeValues.length ? Math.max(...timeValues, nowMs) : nowMs;
   $: spanMs = Math.max(60000, maxTime - minTime);
@@ -73,19 +80,21 @@
   $: toX = (timestamp) => ((timestamp - minTime) / spanMs) * timelineWidth;
 
   $: rows = nodeIds.map((nodeId) => {
-    const positioned = sortedBlocks(blocks.filter((b) => b.nodeId === nodeId)).map((block) => ({
+    const positioned = sortedBlocks(
+      blocks.filter((b) => b.nodeId === nodeId),
+    ).map((block) => ({
       ...block,
-      x: toX(block.timestamp)
+      x: toX(block.timestamp),
     }));
 
     const connectors = positioned.slice(1).map((block, index) => {
       const previous = positioned[index];
-      const left = previous.x + blockSize / 2;
-      const right = block.x - blockSize / 2;
+      const left = previous.x + blockWidth / 2;
+      const right = block.x - blockWidth / 2;
       return {
         left,
         width: Math.max(8, right - left),
-        status: block.status
+        status: block.status,
       };
     });
 
@@ -120,8 +129,14 @@
   <span><i class="dot canonical"></i>Canonical</span>
   <span><i class="dot pending"></i>Pending</span>
   <span><i class="dot rolled-back"></i>Rolled Back</span>
-  <button class="live-btn" on:click={() => { followLive = true; jumpToLiveEdge(); }}>
-    {followLive ? 'Following Live' : 'Jump To Live'}
+  <button
+    class="live-btn"
+    on:click={() => {
+      followLive = true;
+      jumpToLiveEdge();
+    }}
+  >
+    {followLive ? "Following Live" : "Jump To Live"}
   </button>
 </div>
 
@@ -143,7 +158,10 @@
     </div>
 
     {#each rows as row}
-      <div class="track" style={`width:${timelineWidth}px; height:${rowHeight}px`}>
+      <div
+        class="track"
+        style={`width:${timelineWidth}px; height:${rowHeight}px`}
+      >
         {#each row.connectors as connector}
           <div
             class="connector"
@@ -154,11 +172,13 @@
         {#each row.blocks as block}
           <button
             class="block status-{block.status}"
-            style={`left:${block.x - blockSize / 2}px; width:${blockSize}px; height:${blockSize}px; border-radius:${blockRadius}px`}
+            style={`left:${block.x - blockWidth / 2}px; width:${blockWidth}px; height:${blockHeight}px; border-radius:${blockRadius}px`}
             title={`${block.nodeId} #${block.blockHeight} (${block.status})`}
             on:click={() => onSelect(block)}
           >
-            <span>{block.blockHeight}</span>
+            <span class="block-main">#{block.blockHeight}</span>
+            <span class="block-sub">{shortHash(block.hash)}</span>
+            <span class="block-sub">{ago(block.timestamp, nowMs)}</span>
           </button>
         {/each}
       </div>
@@ -173,7 +193,7 @@
     gap: 14px;
     font-size: 0.83rem;
     margin-bottom: 12px;
-    color: #d4e4f8;
+    color: #111827;
   }
 
   .dot {
@@ -198,9 +218,9 @@
 
   .live-btn {
     margin-left: auto;
-    border: 1px solid #334155;
-    background: #0f172a;
-    color: #dbeafe;
+    border: 1px solid #d1d5db;
+    background: #ffffff;
+    color: #111827;
     font: inherit;
     border-radius: 8px;
     padding: 6px 10px;
@@ -210,18 +230,15 @@
   .board {
     display: grid;
     grid-template-columns: 180px 1fr;
-    border: 1px solid #1f2937;
-    border-radius: 14px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
     overflow: hidden;
-    background:
-      radial-gradient(circle at 10% 10%, #1e293b 0%, transparent 40%),
-      radial-gradient(circle at 90% 80%, #172554 0%, transparent 45%),
-      #020617;
+    background: #ffffff;
   }
 
   .left-column {
-    border-right: 1px solid #1f2937;
-    background: linear-gradient(180deg, #0b1222 0%, #070d1a 100%);
+    border-right: 1px solid #e5e7eb;
+    background: #ffffff;
   }
 
   .corner {
@@ -232,32 +249,32 @@
     font-size: 0.8rem;
     letter-spacing: 0.08em;
     text-transform: uppercase;
-    color: #9cb5d2;
-    border-bottom: 1px solid #1f2937;
+    color: #374151;
+    border-bottom: 1px solid #e5e7eb;
   }
 
   .node-label {
-    height: 72px;
+    height: 96px;
     display: flex;
     align-items: center;
     padding: 0 14px;
-    border-bottom: 1px solid #0f172a;
+    border-bottom: 1px solid #f3f4f6;
     font-weight: 600;
-    color: #dbeafe;
+    color: #111827;
   }
 
   .timeline-scroll {
     overflow-x: auto;
     overflow-y: hidden;
-    scrollbar-color: #334155 #0b1222;
+    scrollbar-color: #9443ff #ffffff;
     scrollbar-width: thin;
   }
 
   .timeline-header {
     position: relative;
     height: 54px;
-    border-bottom: 1px solid #1f2937;
-    background: linear-gradient(180deg, #0d1a30 0%, #081225 100%);
+    border-bottom: 1px solid #e5e7eb;
+    background: #ffffff;
   }
 
   .tick {
@@ -265,7 +282,7 @@
     top: 0;
     bottom: 0;
     width: 1px;
-    background: #334155;
+    background: #d1d5db;
   }
 
   .tick span {
@@ -273,14 +290,14 @@
     top: 8px;
     left: 6px;
     white-space: nowrap;
-    color: #9cb5d2;
+    color: #374151;
     font-size: 0.74rem;
-    font-family: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   }
 
   .track {
     position: relative;
-    border-bottom: 1px solid #0f172a;
+    border-bottom: 1px solid #f3f4f6;
   }
 
   .connector {
@@ -293,36 +310,47 @@
 
   .block {
     position: absolute;
-    top: calc(50% - 15px);
-    border: 1px solid #0f172a;
-    color: #0b1220;
+    top: calc(50% - 28px);
+    border: 1px solid #d1d5db;
+    color: #ffffff;
     font-weight: 700;
     cursor: pointer;
-    display: inline-flex;
-    align-items: center;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
     justify-content: center;
-    transition: transform 110ms ease, box-shadow 110ms ease;
+    padding: 6px 8px;
+    transition:
+      transform 110ms ease,
+      box-shadow 110ms ease;
+    background: #9443ff;
   }
 
-  .block span {
-    font-size: 0.58rem;
-    padding: 0 2px;
+  .block-main {
+    font-size: 0.82rem;
+    line-height: 1.1;
+  }
+
+  .block-sub {
+    font-size: 0.66rem;
+    line-height: 1.1;
+    color: #ffffff8a;
   }
 
   .block:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 8px 18px rgba(2, 6, 23, 0.55);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 12px rgba(17, 24, 39, 0.12);
   }
 
   .status-canonical {
-    background: #22c55e;
+    border-left: 4px solid #22c55e;
   }
 
   .status-pending {
-    background: #facc15;
+    border-left: 4px solid #facc15;
   }
 
   .status-rolled-back {
-    background: #f97316;
+    border-left: 4px solid #f97316;
   }
 </style>
