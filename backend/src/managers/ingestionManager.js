@@ -86,7 +86,9 @@ export class IngestionManager {
 
     this.latestProcessedBlock = new Map();
     this.lastSeenBlock = new Map();
+    this.nodeState = new Map();
     this.blockByHash = new Map();
+    this.txByHash = new Map();
     this.blocks = [];
 
     this.traceQueue = new TaskQueue({
@@ -104,16 +106,70 @@ export class IngestionManager {
     return [...this.blocks].sort((a, b) => a.blockHeight - b.blockHeight);
   }
 
+  getLatestBlocksByNode() {
+    const latestByNode = new Map();
+    for (const block of this.blocks) {
+      const current = latestByNode.get(block.nodeId);
+      if (!current || block.blockHeight > current.blockHeight) {
+        latestByNode.set(block.nodeId, block);
+      }
+    }
+    return [...latestByNode.values()].sort((a, b) => a.nodeId.localeCompare(b.nodeId));
+  }
+
+  getNodeStatuses() {
+    const now = Date.now();
+    return this.rpcManager.getNodeClients().map((node) => {
+      const state = this.nodeState.get(node.nodeId) || {};
+      const latestSeen = this.lastSeenBlock.get(node.nodeId) ?? null;
+      const latestProcessed = this.latestProcessedBlock.get(node.nodeId) ?? null;
+      const lagBlocks =
+        latestSeen !== null && latestProcessed !== null ? Math.max(0, latestSeen - latestProcessed) : null;
+      const queue = this.blockQueues.get(node.nodeId);
+      const disabledForMs = Math.max(0, (node.disabledUntil || 0) - now);
+
+      return {
+        nodeId: node.nodeId,
+        rpc: node.rpc,
+        latestSeenBlock: latestSeen,
+        latestProcessedBlock: latestProcessed,
+        lagBlocks,
+        queueDepth: queue?.depth ?? 0,
+        queuePaused: queue?.paused ?? false,
+        lastPollAt: state.lastPollAt ?? null,
+        lastProcessedAt: state.lastProcessedAt ?? null,
+        lastErrorAt: state.lastErrorAt ?? null,
+        lastErrorMessage: state.lastErrorMessage ?? null,
+        isDisabled: disabledForMs > 0,
+        disabledForMs
+      };
+    });
+  }
+
+  getNetworkOverview() {
+    const latestByNode = this.getLatestBlocksByNode();
+    const nodes = this.getNodeStatuses();
+    const consensusHashSet = new Set(latestByNode.map((b) => b.hash));
+    const highestSeen = Math.max(...nodes.map((n) => n.latestSeenBlock ?? 0), 0);
+    const highestProcessed = Math.max(...nodes.map((n) => n.latestProcessedBlock ?? 0), 0);
+
+    return {
+      generatedAt: Date.now(),
+      nodeCount: nodes.length,
+      highestSeenBlock: highestSeen || null,
+      highestProcessedBlock: highestProcessed || null,
+      latestHeadHashes: [...consensusHashSet],
+      headsAgree: consensusHashSet.size <= 1,
+      nodes
+    };
+  }
+
   getBlockByHash(hash) {
     return this.blockByHash.get(hash) || null;
   }
 
   getTransaction(txHash) {
-    for (const block of this.blocks) {
-      const tx = block.transactions.find((item) => item.hash === txHash);
-      if (tx) return { ...tx, blockHeight: block.blockHeight, blockHash: block.hash, nodeId: block.nodeId };
-    }
-    return null;
+    return this.txByHash.get(txHash) || null;
   }
 
   async startIngestion() {
@@ -126,6 +182,7 @@ export class IngestionManager {
           name: `blocks-${node.nodeId}`
         })
       );
+      this.nodeState.set(node.nodeId, {});
 
       this.#attachNode(node);
     }
@@ -168,6 +225,7 @@ export class IngestionManager {
         }
       } catch (error) {
         this.metrics.rpcErrors += 1;
+        this.#setNodeError(node.nodeId, error);
       }
     }, config.ingestion.pollIntervalMs);
 
@@ -188,6 +246,8 @@ export class IngestionManager {
   }
 
   async #processHeight(node, height) {
+    this.#setNodeState(node.nodeId, { lastPollAt: Date.now() });
+
     const [rawBlock] = await this.rpcManager.batchRpcCall(node, [
       {
         method: 'eth_getBlockByNumber',
@@ -240,10 +300,12 @@ export class IngestionManager {
       await this.firebaseManager.writeBlockBundle(block, tracesByTxHash);
     } catch (error) {
       this.metrics.firebaseErrors += 1;
+      this.#setNodeError(node.nodeId, error);
       return;
     }
 
     this.latestProcessedBlock.set(node.nodeId, block.blockHeight);
+    this.#setNodeState(node.nodeId, { lastProcessedAt: Date.now(), lastErrorAt: null, lastErrorMessage: null });
     this.reorgManager.append(node.nodeId, block);
     this.#rememberBlock(block);
     this.onCanonicalBlock(block);
@@ -253,10 +315,35 @@ export class IngestionManager {
   #rememberBlock(block) {
     this.blocks.push(block);
     this.blockByHash.set(block.hash, block);
-
-    while (this.blocks.length > 5000) {
-      const old = this.blocks.shift();
-      if (old) this.blockByHash.delete(old.hash);
+    for (const tx of block.transactions) {
+      this.txByHash.set(tx.hash, {
+        ...tx,
+        blockHeight: block.blockHeight,
+        blockHash: block.hash,
+        nodeId: block.nodeId
+      });
     }
+
+    while (this.blocks.length > config.maxInMemoryBlocks) {
+      const old = this.blocks.shift();
+      if (!old) continue;
+      this.blockByHash.delete(old.hash);
+      for (const tx of old.transactions) {
+        const existing = this.txByHash.get(tx.hash);
+        if (existing?.blockHash === old.hash) this.txByHash.delete(tx.hash);
+      }
+    }
+  }
+
+  #setNodeState(nodeId, patch) {
+    const prev = this.nodeState.get(nodeId) || {};
+    this.nodeState.set(nodeId, { ...prev, ...patch });
+  }
+
+  #setNodeError(nodeId, error) {
+    this.#setNodeState(nodeId, {
+      lastErrorAt: Date.now(),
+      lastErrorMessage: error?.message || String(error)
+    });
   }
 }

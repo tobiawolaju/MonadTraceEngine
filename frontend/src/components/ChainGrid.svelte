@@ -5,7 +5,12 @@
   export let onSelect = () => {};
   export let highlightedHashes = [];
   export let isPaused = false;
+  export let isFollowingLive = true;
+  export let historyLoading = false;
   export let onTogglePause = () => {};
+  export let onNeedHistory = () => {};
+  export let onFollowLiveChange = () => {};
+  export let onJumpToLive = () => {};
 
   const statusColors = {
     canonical: "#22c55e",
@@ -24,10 +29,10 @@
 
   let nowMs = Date.now();
   let scroller;
-  let followLive = true;
   let lastKnownBlockCount = 0;
   let nowTimer;
   let viewportWidth = 1280;
+  let historyTriggerLocked = false;
 
   const sortedBlocks = (items) =>
     [...items].sort((a, b) => {
@@ -71,7 +76,19 @@
     if (!scroller) return;
     const remaining =
       scroller.scrollWidth - scroller.clientWidth - scroller.scrollLeft;
-    if (remaining > 120) followLive = false;
+    if (remaining > 120 && isFollowingLive) onFollowLiveChange(false);
+
+    if (
+      scroller.scrollLeft < 240 &&
+      !historyLoading &&
+      !historyTriggerLocked &&
+      !isFollowingLive
+    ) {
+      historyTriggerLocked = true;
+      Promise.resolve(onNeedHistory()).finally(() => {
+        historyTriggerLocked = false;
+      });
+    }
   }
 
   $: nodeIds = [...new Set(blocks.map((b) => b.nodeId))].sort(nodeSort);
@@ -80,9 +97,11 @@
   $: blockWidth = isMobileLayout ? 124 : 160;
   $: blockHeight = isMobileLayout ? 50 : 56;
   $: rowHeight = isMobileLayout ? 82 : 96;
-  $: minTime = nowMs - visibleWindowMs;
-  $: maxTime = nowMs;
-  $: spanMs = visibleWindowMs;
+  $: dataMinTs = blocks.length ? Math.min(...blocks.map((b) => b.timestamp)) : nowMs - visibleWindowMs;
+  $: dataMaxTs = blocks.length ? Math.max(...blocks.map((b) => b.timestamp)) : nowMs;
+  $: minTime = Math.min(dataMinTs, nowMs - visibleWindowMs);
+  $: maxTime = Math.max(dataMaxTs, nowMs);
+  $: spanMs = Math.max(visibleWindowMs, maxTime - minTime);
   $: timelineWidth = Math.max(1200, Math.round((spanMs / 1000) * 1.1));
   $: toX = (timestamp) => ((timestamp - minTime) / spanMs) * timelineWidth;
 
@@ -116,7 +135,7 @@
     return values;
   })();
 
-  $: if (followLive && scroller && blocks.length !== lastKnownBlockCount) {
+  $: if (isFollowingLive && scroller && blocks.length !== lastKnownBlockCount) {
     lastKnownBlockCount = blocks.length;
     tick().then(jumpToLiveEdge);
   }
@@ -129,7 +148,7 @@
     window.addEventListener("resize", handleResize);
 
     nowTimer = setInterval(() => {
-      if (!isPaused) nowMs = Date.now();
+      if (!isPaused && isFollowingLive) nowMs = Date.now();
     }, 1000);
 
     return () => {
@@ -157,6 +176,20 @@
     {:else}
       &#10074;&#10074;
     {/if}
+  </button>
+  <button
+    class="live-btn jump-btn"
+    on:click={() => {
+      nowMs = Date.now();
+      onFollowLiveChange(true);
+      onJumpToLive();
+      tick().then(jumpToLiveEdge);
+    }}
+    disabled={isFollowingLive}
+    aria-label="Jump to live"
+    title="Jump to live"
+  >
+    Jump to Live
   </button>
 </div>
 
@@ -251,6 +284,15 @@
     min-width: 42px;
     text-align: center;
     cursor: pointer;
+  }
+
+  .live-btn:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+
+  .jump-btn {
+    min-width: 96px;
   }
 
   .board {

@@ -13,6 +13,7 @@ export const config = {
   wsPath: process.env.WS_PATH || '/ws',
   metricsLogIntervalMs: Number(process.env.METRICS_LOG_INTERVAL_MS || 60_000),
   broadcastWindowMs: Number(process.env.BROADCAST_WINDOW_MS || 60_000),
+  maxInMemoryBlocks: Number(process.env.MAX_IN_MEMORY_BLOCKS || 5000),
   nodes: defaultNodes,
   ingestion: {
     pollIntervalMs: Number(process.env.POLL_INTERVAL_MS || 3000),
@@ -31,9 +32,9 @@ export const config = {
   },
   firebase: {
     serviceAccountJsonPath:
-      process.env.ServeiceAccuntJson ||
-      process.env.ServiceAccountJson ||
       process.env.SERVICE_ACCOUNT_JSON_PATH ||
+      process.env.ServiceAccountJson ||
+      process.env.ServeiceAccuntJson ||
       '',
     databaseURL: process.env.FIREBASE_DATABASE_URL
   }

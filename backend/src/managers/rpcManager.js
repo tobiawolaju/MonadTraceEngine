@@ -120,7 +120,11 @@ export class RpcManager {
 
   close() {
     for (const node of this.nodes) {
-      node.provider.destroy();
+      if (typeof node.provider.destroy === 'function') {
+        node.provider.destroy();
+      } else if (typeof node.provider.removeAllListeners === 'function') {
+        node.provider.removeAllListeners();
+      }
     }
   }
 }

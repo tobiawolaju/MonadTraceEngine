@@ -2,25 +2,32 @@
   import { onMount } from 'svelte';
   import ChainGrid from './components/ChainGrid.svelte';
   import BlockModal from './components/BlockModal.svelte';
+  import NetworkOverview from './components/NetworkOverview.svelte';
 
   let blocks = [];
+  let overview = null;
+  let nodes = [];
   let selectedBlock = null;
   let highlightedHashes = [];
   let isPaused = false;
+  let isFollowingLive = true;
+  let historyLoading = false;
+  let historyExhausted = false;
   let reconnectAttempt = 0;
   let reconnectTimer = null;
   let highlightTimer = null;
-  let pruneTimer = null;
   let syncTimer = null;
+  let overviewTimer = null;
   let syncInFlight = false;
+  let overviewInFlight = false;
   let ws = null;
   let shouldReconnect = true;
-  const oneMinuteMs = 60 * 1000;
 
   const apiBase =
     import.meta.env.VITE_API_BASE ||
     `${window.location.protocol}//${window.location.hostname}:4000`;
   const wsBase = apiBase.replace(/^http/i, 'ws');
+  const wsPath = import.meta.env.VITE_WS_PATH || '/ws';
 
   function toMsTimestamp(value) {
     const numeric = Number(value);
@@ -37,26 +44,57 @@
     return `${block?.nodeId || 'unknown'}:${block?.hash || 'unknown'}`;
   }
 
-  function keepRecent(items) {
-    const cutoff = Date.now() - oneMinuteMs;
+  function mergeBlocks(items) {
     const byKey = new Map();
-    for (const block of items
-      .map(normalizeBlock)
-      .filter((b) => b.timestamp >= cutoff)) {
+    for (const block of items.map(normalizeBlock)) {
       byKey.set(blockKey(block), block);
     }
-    return [...byKey.values()];
+    return [...byKey.values()].sort((a, b) => a.timestamp - b.timestamp).slice(-15000);
   }
 
   async function loadWindow() {
     if (syncInFlight) return;
     syncInFlight = true;
     try {
-      const res = await fetch(`${apiBase}/api/blocks`);
-      blocks = keepRecent(await res.json());
+      const res = await fetch(`${apiBase}/api/blocks?limit=2000`);
+      blocks = mergeBlocks(await res.json());
       sortBlocks();
     } finally {
       syncInFlight = false;
+    }
+  }
+
+  async function loadHistory() {
+    if (historyLoading || historyExhausted || !blocks.length) return;
+    historyLoading = true;
+    try {
+      const oldestTs = Math.min(...blocks.map((b) => b.timestamp));
+      const res = await fetch(`${apiBase}/api/blocks/history?beforeTs=${oldestTs}&limit=300`);
+      if (!res.ok) return;
+      const older = await res.json();
+      if (!older.length) {
+        historyExhausted = true;
+        return;
+      }
+      blocks = mergeBlocks([...older, ...blocks]);
+      sortBlocks();
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  async function loadOverview() {
+    if (overviewInFlight) return;
+    overviewInFlight = true;
+    try {
+      const [overviewRes, nodesRes] = await Promise.all([
+        fetch(`${apiBase}/api/network/overview`),
+        fetch(`${apiBase}/api/nodes`)
+      ]);
+      if (overviewRes.ok) overview = await overviewRes.json();
+      if (nodesRes.ok) nodes = await nodesRes.json();
+    } finally {
+      overviewInFlight = false;
     }
   }
 
@@ -83,7 +121,7 @@
         addedHashes.push(key);
       }
     }
-    blocks = keepRecent(blocks);
+    blocks = mergeBlocks(blocks);
     sortBlocks();
     if (addedHashes.length) {
       highlightedHashes = [...new Set([...highlightedHashes, ...addedHashes])];
@@ -91,14 +129,6 @@
       highlightTimer = setTimeout(() => {
         highlightedHashes = [];
       }, 1500);
-    }
-  }
-
-  function pruneOldBlocks() {
-    const next = keepRecent(blocks);
-    if (next.length !== blocks.length) {
-      blocks = next;
-      sortBlocks();
     }
   }
 
@@ -123,7 +153,7 @@
   }
 
   function connectWebSocket() {
-    ws = new WebSocket(`${wsBase}/ws`);
+    ws = new WebSocket(`${wsBase}${wsPath}`);
 
     ws.onopen = () => {
       reconnectAttempt = 0;
@@ -153,32 +183,49 @@
   onMount(async () => {
     shouldReconnect = true;
     await loadWindow();
+    await loadOverview();
     connectWebSocket();
-    pruneTimer = setInterval(pruneOldBlocks, 5000);
     // Tight periodic backfill to smooth out inconsistent WS delivery timing.
     syncTimer = setInterval(() => {
-      if (!isPaused) loadWindow();
+      if (!isPaused && isFollowingLive) loadWindow();
     }, 2000);
+    overviewTimer = setInterval(loadOverview, 5000);
     return () => {
       shouldReconnect = false;
       clearTimeout(reconnectTimer);
       clearTimeout(highlightTimer);
-      clearInterval(pruneTimer);
       clearInterval(syncTimer);
+      clearInterval(overviewTimer);
       ws?.close();
     };
   });
 </script>
 
 <main>
+  <NetworkOverview {overview} {nodes} />
   <ChainGrid
     blocks={blocks}
     onSelect={handleSelectBlock}
     highlightedHashes={highlightedHashes}
     isPaused={isPaused}
+    isFollowingLive={isFollowingLive}
+    historyLoading={historyLoading}
+    onNeedHistory={loadHistory}
+    onFollowLiveChange={(next) => {
+      isFollowingLive = next;
+      if (next) {
+        historyExhausted = false;
+        loadWindow();
+      }
+    }}
+    onJumpToLive={() => {
+      isFollowingLive = true;
+      historyExhausted = false;
+      loadWindow();
+    }}
     onTogglePause={() => {
       isPaused = !isPaused;
-      if (!isPaused) loadWindow();
+      if (!isPaused && isFollowingLive) loadWindow();
     }}
   />
   <BlockModal block={selectedBlock} onClose={() => (selectedBlock = null)} />

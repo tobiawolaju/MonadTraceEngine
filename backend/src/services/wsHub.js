@@ -1,8 +1,8 @@
 import { WebSocketServer } from 'ws';
 
 export class WsHub {
-  constructor(server, broadcastWindowMs) {
-    this.wss = new WebSocketServer({ server, path: '/ws' });
+  constructor(server, { path = '/ws', broadcastWindowMs }) {
+    this.wss = new WebSocketServer({ server, path });
     this.queue = [];
     this.timer = setInterval(() => this.flush(), broadcastWindowMs);
 

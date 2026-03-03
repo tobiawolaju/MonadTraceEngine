@@ -1,77 +1,150 @@
-# Monad Execution Trace Indexer (Node.js + Firebase + Svelte + WASM-ready)
+# Monad Execution Trace Indexer
 
-Real-time multi-node block ingestion service for Monad RPC endpoints with reorg handling, execution trace extraction, ephemeral 1-hour retention, and a live visualization dashboard.
+Production-style Monad indexing project focused on backend reliability, multi-node consistency checks, and real-time trace visualization.
+
+## Why this project
+
+This repo is designed to demonstrate engineering quality for backend-heavy blockchain infrastructure work:
+
+- resilient ingestion from multiple RPC nodes
+- queue-based backpressure and retry handling
+- reorg detection with rollback support
+- trace enrichment (`debug_traceTransaction`) for transaction execution insights
+- real-time UI for chain heads, lag, and block stream state
 
 ## Architecture
 
-- **Backend (Node.js / Express / WS / ethers / Firebase Admin)**
-  - Connects to 3 Monad nodes (HTTP + WSS).
-  - Ingests blocks in real time and normalizes block/tx metadata.
-  - Detects reorgs using `parentHash` and rolls back divergent blocks.
-  - Extracts traces using `debug_traceTransaction` with opcode/internal-call flattening.
-  - Assigns `parallelIndex` / `threadId` per transaction for visualization.
-  - Stores canonical/rolled-back records in Firestore when credentials are configured.
-  - Exposes REST query endpoints and throttled websocket pushes (`/ws`, 1-minute batches).
+```mermaid
+flowchart LR
+  N1[Monad Node 1 RPC]
+  N2[Monad Node 2 RPC]
+  N3[Monad Node 3 RPC]
 
-- **Frontend (Svelte + Vite, WASM-ready parser hook)**
-  - Visualizes multi-node blocks with status coloring:
-    - Green = canonical
-    - Red = rolled-back
-    - Yellow = pending
-  - Pause/resume live stream.
-  - Rewind and replay over recent 1-hour window.
-  - Click blocks for modal detail with tx/opcode/internal calls and parallel metadata.
+  subgraph BE[Backend - Node.js/Express]
+    RM[RpcManager + RateLimiter]
+    IM[IngestionManager]
+    RGM[ReorgManager]
+    FBM[FirebaseManager]
+    API[REST API]
+    WS[WsHub]
+    MEM[(In-memory block window)]
+  end
 
-## Run
+  subgraph DB[Firebase RTDB]
+    B[(blocks)]
+    T[(transactions)]
+    TR[(traces)]
+  end
+
+  subgraph FE[Frontend - Svelte]
+    OV[Network Overview]
+    CG[Chain Grid]
+    MD[Block Modal]
+  end
+
+  N1 --> RM
+  N2 --> RM
+  N3 --> RM
+  RM --> IM
+  IM --> RGM
+  IM --> MEM
+  IM --> FBM
+  FBM --> B
+  FBM --> T
+  FBM --> TR
+  MEM --> API
+  MEM --> WS
+  API --> OV
+  API --> CG
+  WS --> CG
+  CG --> MD
+```
+
+## Backend highlights
+
+- `RpcManager`:
+  - per-node token-bucket rate limiting
+  - retry/backoff for rate-limit errors (`-32005`)
+  - temporary node disablement on repeated limit failures
+- `IngestionManager`:
+  - per-node block queues + global trace queue
+  - normalized block/tx storage in memory
+  - indexed tx lookup by hash
+  - node runtime health snapshots and network consensus overview
+- `ReorgManager`:
+  - recent history window per node
+  - rollback callbacks for divergent chain segments
+- `FirebaseManager`:
+  - atomic multi-path writes for blocks/transactions/traces
+  - RTDB-safe sanitization for keys and values
+
+## API
+
+### Health and metrics
+
+- `GET /health`
+- `GET /metrics`
+
+### Blocks and transactions
+
+- `GET /api/blocks?nodeId=&status=&fromHeight=&toHeight=&fromTs=&toTs=&limit=`
+- `GET /api/blocks/latest`
+- `GET /api/blocks/:hash`
+- `GET /api/transactions/:txHash`
+
+### Network and node status
+
+- `GET /api/nodes`
+- `GET /api/network/overview`
+
+### WebSocket
+
+- endpoint: `ws://localhost:4000/ws` (configurable via `WS_PATH`)
+- events:
+  - `{"type":"ready"}`
+  - `{"type":"blocks","data":[...]}`
+
+## Frontend highlights
+
+- live timeline grid for per-node block flow
+- pause/resume stream control
+- reconnect with backfill
+- network overview panel for:
+  - chain head agreement/divergence
+  - highest seen/indexed blocks
+  - per-node lag, queue state, and health
+- modal details for transactions and trace summaries
+
+## Quick start
 
 ```bash
 npm install
-cp backend/.env.example backend/.env
-# set ServeiceAccuntJson to your Firebase service-account json file path
-npm run dev -w backend
-npm run dev -w frontend
+npm run dev
 ```
 
-Backend: `http://localhost:4000`
-Frontend: `http://localhost:5173`
+Services:
 
-## REST API
+- backend: `http://localhost:4000`
+- frontend: `http://localhost:5173`
 
-- `GET /api/blocks?nodeId=&fromHeight=&toHeight=`
-- `GET /api/blocks/:hash`
-- `GET /api/transactions/:txHash`
-- `GET /api/holders/:address`
+## Environment variables (backend)
 
-## WebSocket API
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `4000` | Backend HTTP port |
+| `WS_PATH` | `/ws` | WebSocket endpoint path |
+| `POLL_INTERVAL_MS` | `3000` | Poll cadence for HTTP RPC nodes |
+| `PER_NODE_BLOCK_CONCURRENCY` | `5` | Block-processing workers per node |
+| `TRACE_CONCURRENCY` | `10` | Global trace extraction worker count |
+| `MAX_QUEUE_SIZE` | `1000` | Max queued block or trace tasks |
+| `MAX_IN_MEMORY_BLOCKS` | `5000` | Retained block window in memory |
+| `MAX_REQUESTS_PER_SECOND_PER_NODE` | `40` | Node-level RPC request budget |
+| `SERVICE_ACCOUNT_JSON_PATH` | _none_ | Firebase service account path |
+| `FIREBASE_DATABASE_URL` | _none_ | Firebase RTDB URL override |
 
-- `ws://localhost:4000/ws`
-- Message:
+## Suggested next improvements
 
-```json
-{
-  "type": "blocks",
-  "data": [
-    {
-      "nodeId": "Node1",
-      "blockHeight": 101,
-      "timestamp": 16777216,
-      "hash": "abc123",
-      "parentHash": "abc122",
-      "transactions": [
-        {
-          "txHash": "tx1",
-          "opcodes": ["PUSH1", "ADD", "CALL"],
-          "parallelIndex": 0,
-          "threadId": "thread-0"
-        }
-      ],
-      "status": "canonical"
-    }
-  ]
-}
-```
-
-## Notes
-
-- Firebase auth is loaded from `ServeiceAccuntJson` (service-account JSON path). If omitted/invalid, backend runs in memory-only mode.
-- `frontend/src/wasmTrace.js` is the hook point for a custom `.wasm` parser/aggregator.
+- add integration tests with mocked RPC reorg scenarios
+- persist node health metrics to time-series storage
+- add auth/rate-limits for public API deployment
+- containerize backend/frontend for reproducible environments

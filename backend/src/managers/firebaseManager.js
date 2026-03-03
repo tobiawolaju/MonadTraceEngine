@@ -69,6 +69,7 @@ export class FirebaseManager {
       nodeId: block.nodeId,
       status: block.status
     });
+    updates[`blockHashIndex/${sanitizeKey(block.hash)}`] = block.blockHeight;
 
     for (const tx of block.transactions) {
       const txKey = sanitizeKey(tx.hash);
@@ -100,5 +101,26 @@ export class FirebaseManager {
       updates[`blocks/${h}`] = null;
     }
     await this.db.ref().update(updates);
+  }
+
+  async loadHistoricalBlocks({ beforeTs, limit = 200 }) {
+    if (!this.db) throw new Error('Firebase not initialized');
+    const ref = this.db.ref('blocks').orderByChild('timestamp').endAt(beforeTs - 1).limitToLast(limit);
+    const snap = await ref.get();
+    if (!snap.exists()) return [];
+
+    const value = snap.val() || {};
+    return Object.entries(value)
+      .map(([height, block]) => ({
+        blockHeight: Number(height),
+        hash: block?.hash || null,
+        parentHash: block?.parentHash || null,
+        timestamp: Number(block?.timestamp) || 0,
+        nodeId: block?.nodeId || 'unknown',
+        status: block?.status || 'canonical',
+        transactions: []
+      }))
+      .filter((b) => b.hash)
+      .sort((a, b) => a.timestamp - b.timestamp);
   }
 }
