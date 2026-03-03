@@ -3,6 +3,7 @@
 
   export let blocks = [];
   export let onSelect = () => {};
+  export let highlightedHashes = [];
 
   const statusColors = {
     canonical: "#22c55e",
@@ -13,6 +14,7 @@
   const blockWidth = 160;
   const blockHeight = 56;
   const blockRadius = 9;
+  const visibleWindowMs = 60 * 1000;
   const targetTickCount = 9;
   const tickStepsMs = [
     5000, 10000, 15000, 30000, 60000, 120000, 300000, 600000, 900000, 1800000,
@@ -70,12 +72,10 @@
   }
 
   $: nodeIds = [...new Set(blocks.map((b) => b.nodeId))].sort(nodeSort);
-  $: timeValues = blocks
-    .map((b) => Number(b.timestamp))
-    .filter((t) => Number.isFinite(t));
-  $: minTime = timeValues.length ? Math.min(...timeValues) : nowMs - 300000;
-  $: maxTime = timeValues.length ? Math.max(...timeValues, nowMs) : nowMs;
-  $: spanMs = Math.max(60000, maxTime - minTime);
+  $: highlightedSet = new Set(highlightedHashes);
+  $: minTime = nowMs - visibleWindowMs;
+  $: maxTime = nowMs;
+  $: spanMs = visibleWindowMs;
   $: timelineWidth = Math.max(1200, Math.round((spanMs / 1000) * 1.1));
   $: toX = (timestamp) => ((timestamp - minTime) / spanMs) * timelineWidth;
 
@@ -169,9 +169,10 @@
           ></div>
         {/each}
 
-        {#each row.blocks as block}
+        {#each row.blocks as block (block.hash)}
           <button
             class="block status-{block.status}"
+            class:new-block={highlightedSet.has(block.hash)}
             style={`left:${block.x - blockWidth / 2}px; width:${blockWidth}px; height:${blockHeight}px; border-radius:${blockRadius}px`}
             title={`${block.nodeId} #${block.blockHeight} (${block.status})`}
             on:click={() => onSelect(block)}
@@ -340,6 +341,29 @@
   .block:hover {
     transform: translateY(-1px);
     box-shadow: 0 4px 12px rgba(17, 24, 39, 0.12);
+  }
+
+  .block.new-block {
+    animation: block-arrive 520ms cubic-bezier(0.18, 0.9, 0.3, 1.2);
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+  }
+
+  @keyframes block-arrive {
+    0% {
+      transform: scale(0.84);
+      opacity: 0;
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.45);
+    }
+    60% {
+      transform: scale(1.03);
+      opacity: 1;
+      box-shadow: 0 0 0 8px rgba(59, 130, 246, 0.12);
+    }
+    100% {
+      transform: scale(1);
+      opacity: 1;
+      box-shadow: 0 0 0 0 rgba(59, 130, 246, 0);
+    }
   }
 
   .status-canonical {

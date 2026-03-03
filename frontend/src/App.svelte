@@ -5,12 +5,41 @@
 
   let blocks = [];
   let selectedBlock = null;
+  let highlightedHashes = [];
+  let reconnectAttempt = 0;
+  let reconnectTimer = null;
+  let highlightTimer = null;
+  let pruneTimer = null;
+  let ws = null;
+  let shouldReconnect = true;
+  const oneMinuteMs = 60 * 1000;
 
-  const apiBase = 'http://localhost:4000';
+  const apiBase =
+    import.meta.env.VITE_API_BASE ||
+    `${window.location.protocol}//${window.location.hostname}:4000`;
+  const wsBase = apiBase.replace(/^http/i, 'ws');
+
+  function toMsTimestamp(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return 0;
+    return numeric < 1e12 ? numeric * 1000 : numeric;
+  }
+
+  function normalizeBlock(block) {
+    const timestamp = toMsTimestamp(block.timestamp);
+    return timestamp === block.timestamp ? block : { ...block, timestamp };
+  }
+
+  function keepRecent(items) {
+    const cutoff = Date.now() - oneMinuteMs;
+    return items
+      .map(normalizeBlock)
+      .filter((b) => b.timestamp >= cutoff);
+  }
 
   async function loadWindow() {
     const res = await fetch(`${apiBase}/api/blocks`);
-    blocks = await res.json();
+    blocks = keepRecent(await res.json());
     sortBlocks();
   }
 
@@ -24,14 +53,33 @@
   }
 
   function applyLive(nextBlocks) {
-    for (const b of nextBlocks) {
+    const addedHashes = [];
+    for (const incoming of nextBlocks) {
+      const b = normalizeBlock(incoming);
       const idx = blocks.findIndex((x) => x.hash === b.hash);
       if (idx >= 0) blocks[idx] = b;
-      else blocks.push(b);
+      else {
+        blocks.push(b);
+        addedHashes.push(b.hash);
+      }
     }
-    const cutoff = Date.now() - 60 * 60 * 1000;
-    blocks = blocks.filter((b) => b.timestamp >= cutoff);
+    blocks = keepRecent(blocks);
     sortBlocks();
+    if (addedHashes.length) {
+      highlightedHashes = [...new Set([...highlightedHashes, ...addedHashes])];
+      clearTimeout(highlightTimer);
+      highlightTimer = setTimeout(() => {
+        highlightedHashes = [];
+      }, 1500);
+    }
+  }
+
+  function pruneOldBlocks() {
+    const next = keepRecent(blocks);
+    if (next.length !== blocks.length) {
+      blocks = next;
+      sortBlocks();
+    }
   }
 
   async function handleSelectBlock(block) {
@@ -46,21 +94,56 @@
     }
   }
 
-  onMount(async () => {
-    await loadWindow();
-    const ws = new WebSocket('ws://localhost:4000/ws');
+  function scheduleReconnect() {
+    if (!shouldReconnect) return;
+    clearTimeout(reconnectTimer);
+    const delay = Math.min(30000, 1000 * 2 ** reconnectAttempt);
+    reconnectAttempt += 1;
+    reconnectTimer = setTimeout(connectWebSocket, delay);
+  }
 
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'blocks') applyLive(message.data);
+  function connectWebSocket() {
+    ws = new WebSocket(`${wsBase}/ws`);
+
+    ws.onopen = () => {
+      reconnectAttempt = 0;
     };
 
-    return () => ws.close();
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        if (message.type === 'blocks') applyLive(message.data);
+      } catch {
+        // Ignore malformed websocket payloads.
+      }
+    };
+
+    ws.onerror = () => {
+      ws?.close();
+    };
+
+    ws.onclose = () => {
+      scheduleReconnect();
+    };
+  }
+
+  onMount(async () => {
+    shouldReconnect = true;
+    await loadWindow();
+    connectWebSocket();
+    pruneTimer = setInterval(pruneOldBlocks, 5000);
+    return () => {
+      shouldReconnect = false;
+      clearTimeout(reconnectTimer);
+      clearTimeout(highlightTimer);
+      clearInterval(pruneTimer);
+      ws?.close();
+    };
   });
 </script>
 
 <main>
-  <ChainGrid blocks={blocks} onSelect={handleSelectBlock} />
+  <ChainGrid blocks={blocks} onSelect={handleSelectBlock} highlightedHashes={highlightedHashes} />
   <BlockModal block={selectedBlock} onClose={() => (selectedBlock = null)} />
 </main>
 
