@@ -12,7 +12,6 @@
 
 <div class="splash-screen">
   <div class="splash-content">
-    <h1 class="splash-logo">MTE</h1>
-    <div class="splash-loader"></div>
+    <h1 class="splash-logo">Monad - Trace-- --Engine</h1>
   </div>
 </div>
