@@ -602,7 +602,7 @@ tr:hover td {
 }
 
 .splash-logo {
-  font-size: 5rem;
+  font-size: 2.5rem;
   font-weight: 1000;
   letter-spacing: 0.025em;
   color: #ffffff;
@@ -610,6 +610,14 @@ tr:hover td {
   text-shadow: 0 0 30px var(--color-primary-glow);
 }
 
+.splash-logo2 {
+  font-size: 2.5rem;
+  font-weight: 1000;
+  letter-spacing: 0.025em;
+  color: rgb(255, 39, 226);
+  margin: 0;
+  text-shadow: 0 0 30px var(--color-primary-glow);
+}
 
 @keyframes splash-entrance {
   0% {
