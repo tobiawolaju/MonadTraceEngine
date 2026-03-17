@@ -3,6 +3,7 @@
   import ChainGrid from './components/ChainGrid.svelte';
   import BlockModal from './components/BlockModal.svelte';
   import NetworkOverview from './components/NetworkOverview.svelte';
+  import SplashScreen from './components/SplashScreen.svelte';
 
   let blocks = [];
   let overview = null;
@@ -22,6 +23,7 @@
   let overviewInFlight = false;
   let ws = null;
   let shouldReconnect = true;
+  let showSplash = true;
 
   const apiBase = 'https://monadtraceengine-701630203313.europe-west1.run.app';
   const wsBase = 'wss://monadtraceengine-701630203313.europe-west1.run.app';
@@ -198,6 +200,10 @@
     };
   });
 </script>
+
+{#if showSplash}
+  <SplashScreen on:finish={() => showSplash = false} />
+{/if}
 
 <main>
   <NetworkOverview {overview} {nodes} />
